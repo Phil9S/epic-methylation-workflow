@@ -1,0 +1,6 @@
+# Make bed from DMR tsv
+awk '{ if($14 < 0.05) {print $0}}' A_DMR.tsv | cut -f1-3 | sort -k1,2V -k2,2n -k3,3n > A_DMRS.bed
+
+# Generate BED overlaps
+bedtools intersect -wao -f 0.2 -r -a A.bed -b B.bed | awk '{ if($4 != ".") {print $0}}'
+
