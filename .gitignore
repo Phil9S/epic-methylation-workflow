@@ -1,4 +1,6 @@
+DMP_*
 data/*
 excluded_*
 SampleSex*
 *.html
+*.rds

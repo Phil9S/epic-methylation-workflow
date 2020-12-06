@@ -37,7 +37,7 @@ if (!requireNamespace("BiocManager", quietly = TRUE)){
 
 ### CRAN packages
 ```{r install_cran,warning=FALSE}
-CRANpackages <- c("reshape2","ggplot2","cowplot","ggsignif",
+CRANpackages <- c("tidyverse","reshape2","ggplot2","cowplot","ggsignif",
                   "circlize","RColorBrewer","ggdendro")
 suppressPackageStartupMessages(
 for(package in CRANpackages){
@@ -87,7 +87,7 @@ bmphunter_cutoff <- 0.3
 bmphunter_permutation <- 1000
 test_pheno <- "Mutation_status"
 dmr_distance <- 2000
-SVA  <- TRUE
+SVA  <- FALSE
 
 # Init log files
 write.table(x = paste("Sample","Type",sep = "\t"),
@@ -289,6 +289,9 @@ meanBetaPerGroup <- lapply(X = splits,FUN = function(x){colMeans(getBeta(gRS.flt
 kwt <- kruskal.test(value ~ L1,data = melt(meanBetaPerGroup))
 wilcox <- pairwise.wilcox.test(melt(meanBetaPerGroup)$value,melt(meanBetaPerGroup)$L1,p.adjust = "none")
 
+print(kwt)
+print(wilcox)
+
 ggplot(melt(meanBetaPerGroup)) +
   geom_point(aes(y=value,x=L1,color = L1),position="jitter") +
   geom_boxplot(aes(x=L1,y=value,fill= L1)) +
@@ -324,8 +327,200 @@ ggplot(melt(meanBetaPerGroup)) +
 
 #### Save filtered data
 ```{r save}
-# TEMP Save fitlered methyl data for downstream analysis
+# TEMP Save filtered methyl data for downstream analysis
 saveRDS(gRS.flt,file = "filtered.methyl.data.rds")
+```
+
+#### KMD6A/B/C
+
+```{r get_betas}
+methylBeta <- getBeta(gRS.flt)
+methylBeta <- as.data.frame(methylBeta) %>%
+  rownames_to_column(var = "probe")
+```
+
+```{r gene_ranges}
+KDM4_gene_ranges <- GRanges(seqnames = c("chr1", "chr9", "chr19"), strand = c("+","+","+"),
+               ranges = IRanges(start = c(43650148, 6720863, 4969113),
+                                end = c(43705517,7175648,5153598),
+                                names = c("KDM4A","KDM4C","KDM4B")))
+
+probe_grange <- makeGRangesFromDataFrame(annEPIC,start.field = "pos",end.field = "pos")
+
+probe_KDM4_overlaps <- as.data.frame(subsetByOverlaps(probe_grange,KDM4_gene_ranges))
+
+KDM_methyl <- probe_KDM4_overlaps %>%
+      rownames_to_column(var = "probe") %>%
+      inner_join(.,methylBeta,by="probe") %>%
+      pivot_longer(cols = 7:ncol(.))
+
+KDM_methyl$Group <- sample_sheet$Group[match(KDM_methyl$name,sample_sheet$Sample_Name)]
+KDM_methyl$Mut_status <- sample_sheet$Mutation_status[match(KDM_methyl$name,sample_sheet$Sample_Name)]
+KDM_methyl$gene <- rownames(as.data.frame(KDM4_gene_ranges))[match(KDM_methyl$seqnames,as.data.frame(KDM4_gene_ranges)$seqnames)]
+
+KDM_methyl <- KDM_methyl %>%
+                dplyr::select(-probe,-seqnames,-end,-width,-strand) %>%
+                group_by(start,Group,Mut_status,gene) %>%
+                summarise(beta_median=median(value))
+
+
+diff <- KDM_methyl$beta_median[KDM_methyl$Mut_status == "1"] - KDM_methyl$beta_median[KDM_methyl$Mut_status == "0"] 
+KDM_methyl_diff <- KDM_methyl[KDM_methyl$Mut_status == "1",c("start","Group","gene")]
+KDM_methyl_diff$diff <- diff
+
+ggplot(KDM_methyl_diff) +
+  geom_point(aes(x = start,y = diff)) +
+  geom_hline(yintercept = 0) +
+  scale_y_continuous(limits = c(-1,1)) +
+  labs(title = "Relative differene in probe-level Beta between w/t and mut groups",
+       subtitle = "Positive value is increased methylation / Negative value is decreased methylation") +
+  facet_grid(Group ~ gene,scales = "free")
+
+```
+
+### Metabolomics
+
+```{r groups}
+group <- c("PPGL","GLIOMA")
+```
+
+```{r metabolic corr}
+## correlation/Distribution - metabolomic - methylation
+metabolomic <- sample_sheet[which(colnames(sample_sheet) %in% c("Sample_Name","X2HG_concentration_uM","Succinate_concentration_uM","Group","Mutation_status"))]
+mean_methyl <- data.frame(mean_methyl=colMeans(getBeta(gRS.flt),na.rm = T))
+meta.methyl.merge <- merge(mean_methyl,metabolomic,by.x=0,by.y="Sample_Name",all.y=T)
+```
+
+```{r metabolic_plots}
+meth.dist <- ggplot(meta.methyl.merge) +
+  geom_histogram(aes(mean_methyl),bins = 10,fill="springgreen",color="grey15") +
+  xlab(label = "mean β value") +
+  theme_linedraw() +
+  theme(axis.title.y = element_blank(),plot.margin = unit(x = c(0.01,0.1,0.01,0.01),units = "npc"))
+
+HG.dist <- ggplot(meta.methyl.merge) +
+  geom_histogram(aes(X2HG_concentration_uM),bins = 10,fill="tomato",color="grey15") +
+  xlab(label = "2HG concentration (µM)") +
+  theme_linedraw() +
+  theme(axis.title.y = element_blank(),plot.margin = unit(x = c(0.01,0.1,0.01,0.01),units = "npc"))
+
+succ.dist <- ggplot(meta.methyl.merge) +
+  geom_histogram(aes(Succinate_concentration_uM),bins = 5,fill="skyblue",color="grey15") +
+  xlab(label = "Succinate concentration (µM)") +
+  theme_linedraw() +
+  theme(axis.title.y = element_blank(),plot.margin = unit(x = c(0.01,0.1,0.01,0.01),units = "npc"))
+
+X2HG.data <- meta.methyl.merge[meta.methyl.merge$Group %in% "GLIOMA" & !is.na(meta.methyl.merge$X2HG_concentration_uM) & !is.na(meta.methyl.merge$mean_methyl),]
+Succinate.data <- meta.methyl.merge[meta.methyl.merge$Group == "PPGL" & !is.na(meta.methyl.merge$Succinate_concentration_uM) & !is.na(meta.methyl.merge$mean_methyl),]
+
+HG <- ggplot(X2HG.data) +
+  geom_point(aes(x = mean_methyl,y = X2HG_concentration_uM,color=as.factor(Mutation_status))) +
+  geom_smooth(aes(mean_methyl,X2HG_concentration_uM),method = "lm",se = F) +
+  xlab("mean β value") + ylab("2HG concentration (µM)") +
+  theme_linedraw() +
+  theme(legend.position = "none",plot.margin = unit(x = c(0.01,0.1,0.01,0.01),units = "npc"))
+HG <- HG + annotate(geom = "text",x = 0.57,y = 5200,hjust = 0,label = paste("p.value =",
+                                                                            signif(cor.test(x = X2HG.data$mean_methyl,y = X2HG.data$X2HG_concentration_uM,method = "spearman")$p.value,digits = 3))) +
+  annotate(geom = "text",x = 0.57,y = 5000,hjust = 0,label = paste("spearman rho =",
+                                                                   signif(cor.test(x = X2HG.data$mean_methyl,y = X2HG.data$X2HG_concentration_uM,method = "spearman")$estimate,digits = 3)))
+
+succ <- ggplot(Succinate.data) +
+  geom_point(aes(x = mean_methyl,y = Succinate_concentration_uM,color=as.factor(Mutation_status))) +
+  geom_smooth(aes(mean_methyl,Succinate_concentration_uM),method = "lm",se = F) +
+  xlab("mean β value") + ylab("Succinate concentration (µM)") +
+  theme_linedraw() +
+  theme(legend.position = "none",plot.margin = unit(x = c(0.01,0.1,0.01,0.01),units = "npc"))
+succ <- succ + annotate(geom = "text",x = 0.45,y = 7000,hjust = 0,label = paste("p.value =",
+                                                                                signif(cor.test(x = Succinate.data$mean_methyl,y = Succinate.data$Succinate_concentration_uM,method = "spearman")$p.value,digits = 3))) +
+  annotate(geom = "text",x = 0.45,y = 6800,hjust = 0,label = paste("spearman rho =",
+                                                                   signif(cor.test(x = Succinate.data$mean_methyl,y = Succinate.data$Succinate_concentration_uM,method = "spearman")$estimate,digits = 3)))
+
+plot_grid(plotlist = list(plot_grid(meth.dist,succ.dist,HG.dist,ncol = 3,labels = c("A","B","C")),plot_grid(HG,succ,labels = c("D","E"))),nrow = 2)
+```
+
+### In progress
+
+This section is being worked on but no results are ready.
+This should provide a statistical frame work to define if KDM genes are differentially methylated.
+
+#### DMR modelling
+
+##### PPGL
+```{r subset_methyl_group}
+## Subset data by samples of interest defined by test_group var
+sgRS <- gRS.flt[,pData(gRS.flt)$Group == "PPGL"]
+```
+
+```{r dmr_model}
+## MODEL
+mut_status <- pData(sgRS)[,colnames(pData(sgRS)) == "Mutation_status"]
+tumour_group <- pData(sgRS)[,colnames(pData(sgRS)) == "Group"]
+age <- pData(sgRS)[,colnames(pData(sgRS)) == "Age"]
+design <- model.matrix(~ mut_status)
+```
+
+```{r DMP_sig}
+## DMP
+beta <- getBeta(sgRS)
+dmp <- dmpFinder(beta, pheno = mut_status,type = "categorical",qCutoff = 0.1)
+write.table(x = dmp[dmp$pval < 0.05,],
+            file = paste("DMP_table_",paste("PPGL",collapse = "_"),".tsv",sep = ""),
+            quote = F,sep = "\t",row.names = T,col.names = T)
+```
+
+```{r dmr_fitting}
+## SVA implementation
+if(SVA == TRUE){
+  # mval <- getM(sgRS)
+  # mval <- mval[-which(!is.finite(rowSums(mval))),]
+  # mut_status.sva <- pData(sgRS)
+  # 
+  # mod <- model.matrix(~as.factor(Mutation_status), data=mut_status.sva)
+  # mod0 <- model.matrix(~1, data=mut_status.sva)
+  # 
+  # sva.results <- sva(mval, mod, mod0)
+  # modSv = cbind(mod,sva.results$sv)
+  # fit <- lmFit(mval,modSv)
+  # write.table(x = fit$design,file = paste("sva_bmpHunter_",paste(test_group,collapse = "_"),"_model.txt",sep = ""),quote = F,sep = "\t",row.names = T,col.names = T)
+  # 
+  # registerDoParallel(cores = cores)
+  # dmrs <- bumphunter(sgRS, design = fit$design,cutoff = bmphunter_cutoff, B=bmphunter_permutation, type="Beta",nullMethod="bootstrap")
+} else {
+  # ## CHECK FOR NUMBER OF BUMPS AND ADJUST CUTOFF according - No SVA implementation
+  # ## bumphunter
+  # registerDoParallel(cores = 1)
+  # dmrs.len <- bumphunter(sgRS, design = design,cutoff = bmphunter_cutoff, B=0, type="Beta")
+  # nrow(dmrs.len$table)
+  # dmrs <- bumphunter(sgRS, design = design,cutoff = bmphunter_cutoff, B=bmphunter_permutation, type="Beta")
+}
+```
+
+```{r DMR_annotation}
+## DMR annotation
+# dmrs.GRange <- annotate_dmrs(x = dmrs)
+# write.table(x = as.data.frame(dmrs.GRange),file = paste("dmrs_table_",paste(test_group,collapse = "_"),".tsv",sep = ""),append = F,quote = F,sep = "\t",row.names = F,col.names = T)
+```
+
+```{r DMR_GO_analysis}
+## GO analysis
+# GO.ids <- mapIds(x = org.Hs.eg.db,keys = as.character(dmrs.GRange$name),keytype = "SYMBOL",column = "GO",multiVals = "list")
+# geneL <- dmrs.GRange$fwer
+# names(geneL) <- as.character(dmrs.GRange$name)
+# GOdata <- new("topGOdata",
+#               ontology = "BP",
+#               allGenes = geneL,
+#               geneSel = geneSelction,
+#               annot = annFUN.gene2GO,
+#               gene2GO = GO.ids,
+#               nodeSize = 5)
+# 
+# resultFisher <- runTest(GOdata, algorithm = "classic", statistic = "fisher")
+# resultKS <- runTest(GOdata, algorithm = "classic", statistic = "ks")
+# resultKS.elim <- runTest(GOdata, algorithm = "elim", statistic = "ks")
+# resultKS.weight01 <- runTest(GOdata, algorithm = "weight01", statistic = "ks")
+# 
+# allRes <- GenTable(GOdata,Fisher = resultFisher,weight01KS = resultKS.weight01,KS = resultKS,KSelim = resultKS.elim,topNodes = 500,numChar = 500)
+# write.table(x = as.data.frame(allRes),file = paste("GO_table_",paste(test_group,collapse = "_"),".tsv",sep = ""),append = F,quote = F,sep = "\t",row.names = F,col.names = T)
 ```
 
 ## Session info
