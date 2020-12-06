@@ -1,0 +1,338 @@
+---
+title: "Methylation analysis of metabolomically-driven tumours"
+author: "Philip Smith"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Introduction
+## Preface
+### Resources
+
+- https://bioconductor.org/packages/release/bioc/vignettes/minfi/inst/doc/minfi.html#8_identifying_differentially_methylated_regions
+- https://academic.oup.com/bioinformatics/article/33/4/558/2666344
+- https://www.ncbi.nlm.nih.gov/pubmed/29469594
+- https://www.bioconductor.org/help/course-materials/2015/BioC2015/methylation450k.html#identifying-dmrs-and-dmps
+- https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6366976/
+- https://www.ncbi.nlm.nih.gov/pubmed/23314698?dopt=Abstract
+- http://www.epicenteredresearch.com/amlbinder/SBE2015/Day2/RMarkdown_for_RA_final.html
+
+
+## Env Setup
+### Install bioc manager
+```{r install_bioc,warning=FALSE}
+suppressPackageStartupMessages(
+if (!requireNamespace("BiocManager", quietly = TRUE)){
+  install.packages("BiocManager",dependencies = TRUE)
+  library(BiocManager)
+}
+)
+```
+
+### CRAN packages
+```{r install_cran,warning=FALSE}
+CRANpackages <- c("reshape2","ggplot2","cowplot","ggsignif",
+                  "circlize","RColorBrewer","ggdendro")
+suppressPackageStartupMessages(
+for(package in CRANpackages){
+  if (!sapply(package,require,character=TRUE)){
+    install.packages(package,dependencies = TRUE)
+    sapply(package,require,character=TRUE)
+
+  }
+}
+)
+```
+
+### Bioc packages
+```{r install_biocP,warning=FALSE}
+bicopackages <- c("IlluminaHumanMethylationEPICmanifest","DMRcate",
+                  "IlluminaHumanMethylationEPICanno.ilm10b4.hg19",
+                  "GenomicFeatures","TxDb.Hsapiens.UCSC.hg19.knownGene",
+                  "org.Hs.eg.db","minfi","sva","doParallel","topGO","limma")
+suppressPackageStartupMessages(
+for(package in bicopackages){
+  if (!sapply(package,require,character=TRUE)){
+    BiocManager::install(package)
+    sapply(package,require,character=TRUE)
+  }
+}
+)
+```
+
+### Functions
+```{r funcs}
+## Function for performing data QC
+source("resources/funcs.R")
+```
+
+# Analysis
+## Analysis setup
+### Required variables
+```{r vars}
+## Vars
+preprocess.var <- "Funnorm"
+samplesheet <- "data/850K_final_sample_sheet_recoded_NOV2019_FINAL.txt"
+excluded <- c("D1234004","s065669","S164733") # ALWAYS EXCLUDE
+excluded <- c(excluded,"TB17.0821","gtb81831") # ADD ADDITIONAL SAMPLES HERE
+test_group <- c("PPGL","GLIOMA")
+cores <- 4
+bmphunter_cutoff <- 0.3
+bmphunter_permutation <- 1000
+test_pheno <- "Mutation_status"
+dmr_distance <- 2000
+SVA  <- TRUE
+
+# Init log files
+write.table(x = paste("Sample","Type",sep = "\t"),
+            file = paste("excluded_samples_",paste(test_group,collapse = "_"),".txt",sep = ""),
+            sep = "\t",
+            append = F,
+            col.names = F,
+            row.names = F,
+            quote = F)
+
+write.table(x = paste("Probe","Type",sep = "\t"),
+                file = paste("excluded_probes_",paste(test_group,collapse = "_"),".txt",sep = ""),
+                sep = "\t",
+                append = T,
+                col.names = F,
+                row.names = F,
+                quote = F)
+```
+
+### Load data
+```{r load_sample}
+## Load sample sheet & exclude known unwanted samples
+sample_sheet <- read.table(file = samplesheet,header = T,stringsAsFactors = F,sep = "\t",strip.white = T)
+## Report sample sheet errors resulting in exclusions
+write.table(x = paste(sample_sheet$Sample_Name[sample_sheet$Exclude == TRUE],"SAMPLE_SHEET_ERRORS",sep = "\t"),
+            file = paste("excluded_samples_",paste(test_group,collapse = "_"),".txt",sep = ""),
+            sep = "\t",
+            append = T,
+            col.names = F,
+            row.names = F,
+            quote = F)
+## Final sample sheet
+sample_sheet <- sample_sheet[sample_sheet$Exclude == FALSE,]
+head(sample_sheet)
+```
+
+```{r load_ann}
+## Manifest ann
+annEPIC <- getAnnotation(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+```
+
+```{r load_methylation,warning=FALSE}
+## Read methylation data & label
+Meth.data <- read.metharray.exp(targets = sample_sheet)
+sampleNames(Meth.data) <- as.character(sample_sheet$Sample_Name)
+```
+
+### First pass QC
+#### Manually excluded samples
+
+```{r man_exclude}
+excluded
+## Report excluded samples
+write.table(x = paste(excluded,"MANUAL",sep = "\t"),
+            file = paste("excluded_samples_",paste(test_group,collapse = "_"),".txt",sep = ""),
+            sep = "\t",
+            append = T,
+            col.names = F,
+            row.names = F,
+            quote = F)
+```
+
+Remove manually excluded samples
+
+```{r exclude_man_methyl}
+## Manual exclusion of specific samples
+Meth.data <- Meth.data[,!colnames(Meth.data) %in% excluded]
+```
+
+#### Sex assignment
+```{r sex_qc}
+sex.qc(Meth.data)
+```
+
+#### Probe-level array
+```{r probe_qc}
+Meth.data.QC <- probe.QC(Meth.data)
+```
+
+```{r probe_qc_plot,fig.width=12}
+## General plots
+col.probe.p <- colMeans(detectionP(Meth.data))
+ggplot() + geom_col(aes(y = col.probe.p,x = names(col.probe.p)),color = "grey15",fill="cadetblue3") +
+  geom_hline(yintercept = 0.05,linetype=2) +
+  geom_hline(yintercept = 0.01,linetype=3) +
+  labs(title = "Methylation Detection significance - Cummulative per sample") +
+  xlab("Sample") +
+  ylab("ColMean(detectP-function)") +
+  scale_y_continuous(expand = c(0,0),limits = c(0,0.25)) +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+#### Sample-level array
+```{r sample_qc}
+Meth.data.QC <- sample.QC(Meth.data.QC)
+```
+
+### Normalisation
+```{r norm_array}
+## Perform normalisation method
+gRS <- normalise(exp.data = Meth.data.QC)
+```
+
+#### Remove X/Y
+Mixed sex sample sets are complicated by chrX and chrY probes so are dropped in this instance.
+```{r sex_drop}
+## Drop chrX and chrY probes - mixed sex subset
+write.table(x = paste(rownames(gRS[featureNames(gRS) %in% annEPIC$Name[annEPIC$chr %in% c("chrX","chrY")],]),"CHR_X/Y",sep = "\t"),
+            file = paste("excluded_probes_",paste(test_group,collapse = "_"),".txt",sep = ""),
+            sep = "\t",
+            append = T,
+            col.names = F,
+            row.names = F,
+            quote = F)
+gRS.flt <- gRS[!featureNames(gRS) %in% annEPIC$Name[annEPIC$chr %in% c("chrX","chrY")],]
+```
+
+#### SNP-Probe overlaps
+```{r snp_prove_filt}
+## Filter probes overlaping with common SNPs
+write.table(x = paste(rownames(gRS.flt)[!rownames(gRS.flt) %in% rownames(dropLociWithSnps(gRS.flt, snps=c("SBE","CpG"), maf=0.05))],"SNP_MAF_5pct",sep = "\t"),
+            file = paste("excluded_probes_",paste(test_group,collapse = "_"),".txt",sep = ""),
+            sep = "\t",
+            append = T,
+            col.names = F,
+            row.names = F,
+            quote = F)
+gRS.flt <- dropLociWithSnps(gRS.flt, snps=c("SBE","CpG"), maf=0.05)
+```
+
+#### Cross-reactivity
+```{r x-react}
+## Cross-reactivity data - as provided here https://doi.org/10.1186/s13059-016-1066-1
+x.reactive <- read.table("resources/13059_2016_1066_MOESM1_ESM.csv",sep = ",",header = T,stringsAsFactors = F)
+
+## Dropping cross reactive probes
+write.table(x = paste(rownames(gRS.flt[featureNames(gRS.flt) %in% x.reactive$Name,]),"cross_reactive",sep = "\t"),
+            file = paste("excluded_probes_",paste(test_group,collapse = "_"),".txt",sep = ""),
+            sep = "\t",
+            append = T,
+            col.names = F,
+            row.names = F,
+            quote = F)
+gRS.flt <- gRS.flt[!featureNames(gRS.flt) %in% x.reactive$Name,]
+```
+
+#### Array QC plot
+
+```{r norm_plot,fig.width=12}
+## Density Plots -before and after normalisation and QC
+par(mfrow=c(1,3))
+densityPlot(Meth.data.QC,main = "No normalisation")
+densityPlot(getBeta(gRS),main = "preprocessFunnorm normalisation")
+densityPlot(getBeta(gRS.flt),main = "Post-normalised filtering")
+```
+
+## Analysis
+#### Array clustering
+```{r cluster_array}
+## Clustering all data
+clrs.clst <- brewer.pal(nlevels(as.factor(pData(gRS.flt)$Group)),"Dark2")[as.factor(pData(gRS.flt)$Group)]
+names(clrs.clst) <- as.factor(pData(gRS.flt)$Group)
+
+pca.clst <- t(getBeta(gRS.flt))
+pca.clst.prc <- as.data.frame(prcomp(pca.clst,scale. = T, center = T)$x)
+histCLUST <- as.dendrogram(hclust(dist(scale(pca.clst),method = "euclidean",diag = F),method = "ward.D2"))
+histCLUST <- dendrapply(histCLUST,colLab)
+```
+
+```{r plot_clust_hist,fig.width=12}
+plot(histCLUST, type = "triangle", ylab = "")
+legend("topright",
+       legend = unique(names(clrs.clst)),
+       col = unique(clrs.clst),
+       pch = 15, bty = "n",  pt.cex = 1, cex = 0.5,
+       text.col = "black", horiz = FALSE)
+```
+
+```{r plot_clust_pca,fig.width=12}
+ggplot(as.data.frame(pca.clst.prc)) +
+  geom_point(aes(PC1,PC2,colour = as.factor(pData(gRS.flt)$Group),shape = as.factor(pData(gRS.flt)$Mutation_status))) +
+  theme_minimal() +
+  theme(legend.direction = "horizontal",legend.position = "bottom",axis.line = element_line()) +
+  scale_color_discrete(name = "Group") +
+  scale_shape_discrete(name = "Mutation status", labels = c("WT","MUT"))
+```
+
+#### Sample sheet summary
+```{r sample_summary}
+## Summary plot and stats
+sample_sheet$split <- paste(sample_sheet$Group,ifelse(sample_sheet$Mutation_status == 1,"mutated","non-mutated"),sep = " ")
+splits <- split(x = sample_sheet[,1],f = factor(sample_sheet$split))
+meanBetaPerGroup <- lapply(X = splits,FUN = function(x){colMeans(getBeta(gRS.flt[,colnames(gRS.flt) %in% x]),na.rm = T)})
+```
+
+#### Global methylation
+```{r median_methylation,fig.width=12}
+## Non-parametric
+kwt <- kruskal.test(value ~ L1,data = melt(meanBetaPerGroup))
+wilcox <- pairwise.wilcox.test(melt(meanBetaPerGroup)$value,melt(meanBetaPerGroup)$L1,p.adjust = "none")
+
+ggplot(melt(meanBetaPerGroup)) +
+  geom_point(aes(y=value,x=L1,color = L1),position="jitter") +
+  geom_boxplot(aes(x=L1,y=value,fill= L1)) +
+  geom_signif(aes(x=L1,y=value),
+              comparisons = list(c("GIST mutated","GIST non-mutated"),
+                                 c("PPGL mutated","PPGL non-mutated")),
+              test = "wilcox.test",y_position = 0.7,map_signif_level = F) +
+  scale_y_continuous(limits = c(NA,0.85)) +
+  scale_fill_manual(name="Group",
+                    values = alpha(c("darkolivegreen1","darkolivegreen3","gold1","gold3"),0.7),
+                    aesthetics = c("color","fill")) +
+  ylab("Mean β value") +
+  xlab(NULL) +
+  labs(title = "Mean methylation per group") +
+  theme_bw() +
+  theme(legend.position = "bottom",
+        legend.direction = "horizontal")
+```
+
+```{r density_methylation,fig.width=12}
+ggplot(melt(meanBetaPerGroup)) +
+  geom_density(aes(value, fill=L1)) +
+  scale_fill_manual(name="Group",
+                    values = alpha(c("darkolivegreen1","darkolivegreen3","gold1","gold3"),0.7)) +
+  scale_x_continuous(limits =  c(0,1)) +
+  ylab("Density") +
+  xlab(NULL) +
+  theme_bw() +
+  theme(legend.position = "bottom",
+        legend.direction = "horizontal") +
+  facet_wrap(.~L1,nrow = 3,ncol=2)
+```
+
+#### Save filtered data
+```{r save}
+# TEMP Save fitlered methyl data for downstream analysis
+saveRDS(gRS.flt,file = "filtered.methyl.data.rds")
+```
+
+## Session info
+```{r sessionInfo}
+sessionInfo()
+```
+
+```{r end}
+# END
+```
