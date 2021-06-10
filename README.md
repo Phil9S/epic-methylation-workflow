@@ -14,17 +14,19 @@ Methylation data was generated using [Infinium methylation EPIC array](https://w
 
 Probe beta values were calculated using the `minfi::getBeta()` function which extracts beta values as `Beta = Meth / (Meth + Unmeth + offset)`, where offset is utilised to avoid division by small numerical values. Mean beta values for each sample were then computed across all probes included in a given method (full, top 20% variance etc.) and compared between wild-type and mutant PCC/PPGL samples using a Mann-whitney U test (`stats::wilcox.test()` function).
 
-Gene loci and promotor CpG island data for _KDM4A_, _KDM4B_, and _KDM4C_ loci was downloaded from the UCSC genome track browser [[4](https://academic.oup.com/bioinformatics/article/30/7/1003/232409)] Regions were intersected with  methylation data using the package GenomicRanges package (version 1.38.0) [[6](https://pubmed.ncbi.nlm.nih.gov/23950696/)] and beta values between wild-type and mutant PCC/PPGL samples at CpG islands spanning the gene loci and CpG islands attributable to the promotor region (2kb upstream of the start codon), using a Mann-whitney U test (`stats::wilcox.test()` function). 
+Gene loci and promotor CpG island data for _KDM4A_, _KDM4B_, and _KDM4C_ loci was downloaded from the UCSC genome track browser [[4](https://academic.oup.com/bioinformatics/article/30/7/1003/232409)]. Regions were intersected with  methylation data using the package GenomicRanges package (version 1.38.0) [[6](https://pubmed.ncbi.nlm.nih.gov/23950696/)] and beta values between wild-type and mutant PCC/PPGL samples at CpG islands spanning the gene loci and CpG islands attributable to the promotor region (2kb upstream of the start codon), using a Mann-whitney U test (`stats::wilcox.test()` function). 
 
 #### Differential methylation
 
-Differentially methylated region analysis was performed using the bumphunter package (version 1.28.0) [[5](https://pubmed.ncbi.nlm.nih.gov/22422453/)]. Differential methylation was tested between wild-type and mutant PCC/PPGL samples using a methylation cutoff of `0.2` and `100` permutations. Identified bumps were intersected with annotated gene loci using `bumphunter::matchGenes()` function, where gene annotation data was extracted from the TxDb.Hsapiens.UCSC.hg19.knownGene package (version 3.2.2) [[7](https://bioconductor.org/packages/release/data/annotation/html/TxDb.Hsapiens.UCSC.hg19.knownGene.html)]
+Differentially methylated region analysis was performed using the bumphunter package (version 1.28.0) [[5](https://pubmed.ncbi.nlm.nih.gov/22422453/)]. Differential methylation was tested between wild-type and mutant PCC/PPGL samples using a methylation cutoff of `0.2` and `100` permutations. Identified bumps were intersected with annotated gene loci using `bumphunter::matchGenes()` function, where gene annotation data was extracted from the TxDb.Hsapiens.UCSC.hg19.knownGene package (version 3.2.2) [[7](https://bioconductor.org/packages/release/data/annotation/html/TxDb.Hsapiens.UCSC.hg19.knownGene.html)]. 
 
 #### Metabolic correlations
 
 Correlations between mean beta values and empirically-determined succinate concentrations was performed using a spearmans rank correlation test (`stats::cor.test()` function).
 
 ## Implemenation guide
+
+To be added on data archive submission.
 
 ## References
 - [1] [R Project for Statistical Computing](https://www.r-project.org/)
