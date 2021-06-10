@@ -1,7 +1,2 @@
-DMP_*
 data/*
-excluded_*
-SampleSex*
-*.html
 *.rds
-dmrs_table_PPGL.tsv

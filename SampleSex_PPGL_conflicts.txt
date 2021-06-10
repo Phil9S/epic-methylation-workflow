@@ -1,0 +1,7 @@
+Sample_Name	Sex	predictedSex
+18A	F	M
+20A	F	M
+21	M	F
+22A	F	M
+43E	F	M
+TB15.0251	F	M

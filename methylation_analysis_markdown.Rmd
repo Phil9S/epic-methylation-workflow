@@ -87,7 +87,7 @@ bmphunter_cutoff <- 0.2
 bmphunter_permutation <- 100
 test_pheno <- "Mutation_status"
 dmr_distance <- 2000
-SVA  <- FALSE
+#SVA  <- FALSE
 
 # Init log files
 write.table(x = paste("Sample","Type",sep = "\t"),
@@ -158,7 +158,7 @@ Remove manually excluded samples
 Meth.data <- Meth.data[,!colnames(Meth.data) %in% excluded]
 ```
 
-#### Sex assignment
+#### Sex assignment check
 ```{r sex_qc}
 sex.qc(Meth.data)
 ```
@@ -288,15 +288,14 @@ ggplot(as.data.frame(pca.clst.prc)) +
 sample_sheet$split <- paste(sample_sheet$Group,ifelse(sample_sheet$Mutation_status == 1,"mutated","non-mutated"),sep = " ")
 splits <- split(x = sample_sheet[,1],f = factor(sample_sheet$split))
 meanBetaPerGroup <- lapply(X = splits,FUN = function(x){colMeans(getBeta(gRS.flt[,colnames(gRS.flt) %in% x]),na.rm = T)})
+meanBetaPerGroup <- meanBetaPerGroup[lengths(meanBetaPerGroup) != 0]
 ```
 
 #### Global methylation (all)
 ```{r median_methylation}
 ## Non-parametric
-kwt <- kruskal.test(value ~ L1,data = melt(meanBetaPerGroup))
-wilcox <- pairwise.wilcox.test(melt(meanBetaPerGroup)$value,melt(meanBetaPerGroup)$L1,p.adjust = "none")
+wilcox <- wilcox.test(formula = value ~ L1,data = melt(meanBetaPerGroup))
 
-print(kwt)
 print(wilcox)
 
 ggplot(melt(meanBetaPerGroup)) +
@@ -306,9 +305,6 @@ ggplot(melt(meanBetaPerGroup)) +
               comparisons = list(c("PPGL mutated","PPGL non-mutated")),
               test = "wilcox.test",y_position = 0.7,map_signif_level = F) +
   scale_y_continuous(limits = c(NA,0.85)) +
-  scale_fill_manual(name="Group",
-                    values = alpha(c("darkolivegreen1","darkolivegreen3","gold1","gold3"),0.7),
-                    aesthetics = c("color","fill")) +
   ylab("Mean β value") +
   xlab(NULL) +
   labs(title = "Mean methylation per group (all probes)") +
@@ -326,10 +322,8 @@ meanBetaPerGroupVar <- lapply(X = splits,FUN = function(x){
 })
 
 ## Non-parametric
-kwt <- kruskal.test(value ~ L1,data = melt(meanBetaPerGroupVar))
-wilcox <- pairwise.wilcox.test(melt(meanBetaPerGroupVar)$value,melt(meanBetaPerGroupVar)$L1,p.adjust = "none")
+wilcox <- wilcox.test(formula = value ~ L1,data = melt(meanBetaPerGroupVar))
 
-print(kwt)
 print(wilcox)
 
 ggplot(melt(meanBetaPerGroupVar)) +
@@ -339,9 +333,6 @@ ggplot(melt(meanBetaPerGroupVar)) +
               comparisons = list(c("PPGL mutated","PPGL non-mutated")),
               test = "wilcox.test",y_position = 0.7,map_signif_level = F) +
   scale_y_continuous(limits = c(NA,0.85)) +
-  scale_fill_manual(name="Group",
-                    values = alpha(c("darkolivegreen1","darkolivegreen3","gold1","gold3"),0.7),
-                    aesthetics = c("color","fill")) +
   ylab("Mean β value") +
   xlab(NULL) +
   labs(title = "Mean methylation per group (20% most variable)") +
@@ -349,22 +340,7 @@ ggplot(melt(meanBetaPerGroupVar)) +
   theme(legend.position = "bottom",
         legend.direction = "horizontal")
 ```
-
-#### Save filtered data
-```{r save}
-# TEMP Save filtered methyl data for downstream analysis
-saveRDS(gRS.flt,file = "filtered.methyl.data.rds")
-```
-
-```{r temp_reload}
-gRS.flt <- readRDS("filtered.methyl.data.rds")
-```
-
 ### Metabolomics
-
-```{r groups}
-#group <- c("PPGL")
-```
 
 ```{r metabolic corr}
 ## correlation/Distribution - metabolomic - methylation
@@ -410,7 +386,7 @@ succ
 ```{r kdm4_ranges}
 KDM4_gene_ranges <- GRanges(seqnames = c("chr1", "chr9", "chr19"), strand = c("+","+","+"),
                ranges = IRanges(start = c(43650148, 6720863, 4969113),
-                                end = c(43705517,7175648,5153598),
+                                 end = c(43705517,7175648,5153598),
                                 names = c("KDM4A","KDM4C","KDM4B")))
 ```
 
@@ -449,15 +425,17 @@ write.table(x = dmp[dmp$pval < 0.05,],
 dmrs <- bumphunter(sgRS, design = design,cutoff = bmphunter_cutoff, B=bmphunter_permutation, type="Beta")
 ```
 
-```{r DMR_annotation}
+```{r DMR_annotation,echo=FALSE}
 ## DMR annotation
 dmrs.GRange <- annotate_dmrs(x = dmrs)
 write.table(x = as.data.frame(dmrs.GRange),file = paste("dmrs_table_",paste(test_group,collapse = "_"),".tsv",sep = ""),append = F,quote = F,sep = "\t",row.names = F,col.names = T)
 ```
+
+#### KDM4A/B/C
+
 ```{r dmr_findings}
 dmrs.GRange[dmrs.GRange$name %in% grep(dmrs.GRange$name,pattern = "KDM4*"),]
 ```
-#### KDM4A/B/C
 
 ```{r get_betas}
 methylBeta <- getBeta(gRS.flt)
@@ -476,17 +454,18 @@ KDM_methyl <- probe_KDM4_overlaps %>%
 KDM_methyl$Group <- sample_sheet$Group[match(KDM_methyl$name,sample_sheet$Sample_Name)]
 KDM_methyl$Mut_status <- sample_sheet$Mutation_status[match(KDM_methyl$name,sample_sheet$Sample_Name)]
 KDM_methyl$gene <- rownames(as.data.frame(KDM4_gene_ranges))[match(KDM_methyl$seqnames,as.data.frame(KDM4_gene_ranges)$seqnames)]
+KDM_methyl$Group <- ifelse(KDM_methyl$Mut_status == 1,"mutated","non-mutated")
 
 ggplot(KDM_methyl) +
-  geom_boxplot(aes(as.factor(as.character(Mut_status)),value,fill=Mut_status)) +
-  ggsignif::geom_signif(aes(as.factor(as.character(Mut_status)),value),comparisons = list(c("0","1"))) +
+  geom_boxplot(aes(Group,value,fill=Group)) +
+  ggsignif::geom_signif(aes(Group,value),comparisons = list(c("mutated","non-mutated")),test = "wilcox.test") +
+  theme_bw() +
   facet_wrap(. ~ gene)
 
 KDM_methyl <- KDM_methyl %>%
                 dplyr::select(-probe,-seqnames,-end,-width,-strand) %>%
                 group_by(start,Group,Mut_status,gene) %>%
                 summarise(beta_median=median(value))
-
 
 diff <- KDM_methyl$beta_median[KDM_methyl$Mut_status == "1"] - KDM_methyl$beta_median[KDM_methyl$Mut_status == "0"] 
 KDM_methyl_diff <- KDM_methyl[KDM_methyl$Mut_status == "1",c("start","Group","gene")]
@@ -498,6 +477,7 @@ ggplot(KDM_methyl_diff) +
   scale_y_continuous(limits = c(-1,1)) +
   labs(title = "Relative differene in probe-level Beta between w/t and mut groups",
        subtitle = "Positive value is increased methylation / Negative value is decreased methylation") +
+  theme_bw() +
   facet_grid(Group ~ gene,scales = "free")
 
 ```
@@ -513,17 +493,18 @@ KDM_methyl <- probe_KDM4_overlaps %>%
 KDM_methyl$Group <- sample_sheet$Group[match(KDM_methyl$name,sample_sheet$Sample_Name)]
 KDM_methyl$Mut_status <- sample_sheet$Mutation_status[match(KDM_methyl$name,sample_sheet$Sample_Name)]
 KDM_methyl$gene <- rownames(as.data.frame(KDM4_gene_ranges))[match(KDM_methyl$seqnames,as.data.frame(KDM4_gene_ranges)$seqnames)]
+KDM_methyl$Group <- ifelse(KDM_methyl$Mut_status == 1,"mutated","non-mutated")
 
 ggplot(KDM_methyl) +
-  geom_boxplot(aes(as.factor(as.character(Mut_status)),value,fill=Mut_status)) +
-  ggsignif::geom_signif(aes(as.factor(as.character(Mut_status)),value),comparisons = list(c("0","1"))) +
+  geom_boxplot(aes(Group,value,fill=Group)) +
+  ggsignif::geom_signif(aes(Group,value),comparisons = list(c("mutated","non-mutated")),test = "wilcox.test") +
+  theme_bw() +
   facet_wrap(. ~ gene)
 
 KDM_methyl <- KDM_methyl %>%
                 dplyr::select(-probe,-seqnames,-end,-width,-strand) %>%
                 group_by(start,Group,Mut_status,gene) %>%
                 summarise(beta_median=median(value))
-
 
 diff <- KDM_methyl$beta_median[KDM_methyl$Mut_status == "1"] - KDM_methyl$beta_median[KDM_methyl$Mut_status == "0"] 
 KDM_methyl_diff <- KDM_methyl[KDM_methyl$Mut_status == "1",c("start","Group","gene")]
@@ -535,11 +516,13 @@ ggplot(KDM_methyl_diff) +
   scale_y_continuous(limits = c(-1,1)) +
   labs(title = "Relative differene in probe-level Beta between w/t and mut groups",
        subtitle = "Positive value is increased methylation / Negative value is decreased methylation") +
+  theme_bw() +
   facet_grid(Group ~ gene,scales = "free")
 
 ```
 
 ## Session info
+
 ```{r sessionInfo}
 sessionInfo()
 ```
